@@ -1,0 +1,421 @@
+esphome:
+  name: esp32lvgl
+  friendly_name: ESP32LVGL
+  platformio_options:
+    board_build.flash_mode: dio
+
+esp32:
+  board: esp32-c3-devkitm-1
+  variant: esp32c3
+  framework:
+    type: arduino
+  flash_size: 16MB
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "7iOuPf+qmq9gaWBYP2ZvzkysFhJsMclH7fiA5ALUvCA="
+
+ota:
+  - platform: esphome
+    password: "1a101aa0d37ea5c31c5eb3c2cb0ed255"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  fast_connect: true
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Esp32Lvgl Fallback Hotspot"
+    password: "ECBi8ZajBRLV"
+
+captive_portal:
+
+substitutions:
+  devicename: wallwatch07
+  friendname: WallWatch07
+  location: guest
+  timez: Europe/Sofia
+  board: esp32-c3-devkitm-1
+  # Display state on initial start
+  # Note that the screensaver only starts after the first touch of the display
+  # Change to ALWAYS_OFF if want the screen to be off after booting, ALWAYS_ON if want it on at start eg for initial troubleshooting
+  screenstart: ALWAYS_ON
+  # Timeout for the screen
+  screensaver: 10 min
+  #GPIO pins for the LCD screen
+  repin: GPIO1
+  dcpin: GPIO2
+  # Note - you may see an error on compilation "WARNING GPIO2 is a Strapping PIN and should be avoided" - ignore this as you have no choice
+  bkpin: GPIO3
+  clpin: GPIO6
+  mopin: GPIO7
+  cspin: GPIO10
+  # GPIO pins for the touch screen
+  sdapin: GPIO4
+  sclpin: GPIO5
+  intpin: GPIO8
+
+# Enable logging
+# Change to avoid "Components should block for at most 20-30ms" warning messages in the log - an issue since 2023.7.0
+# Not really a breaking change - it's an issue I suspect due to the device being slow and this error previously
+# simply not being reported
+logger:
+  level: DEBUG #makes uart stream available in esphome logstream
+  logs:
+    component: ERROR
+  #Turn off UART logging over RX/TX
+  baud_rate: 0
+
+time:
+  - platform: homeassistant
+    timezone: "$timez"
+    id: esptime
+
+font:
+  #- file: 'fonts/GoogleSans-Medium.ttf'
+  - file: "fonts/GoogleSans-Medium.ttf"
+    id: font_16
+  - file: "fonts/PressStart2P-Regular.ttf"
+    id: font_15
+
+binary_sensor:
+  # Tracks the fan switch state
+  - platform: homeassistant
+    id: ventilator_bania
+    entity_id: switch.ventilator_bania
+    publish_initial_state: true
+    on_state:
+      - lvgl.widget.update:
+          id: fan_btn
+          state:
+            checked: !lambda return x;
+
+  - platform: homeassistant
+    id: ventilator_bania_state
+    entity_id: switch.ventilator_bania
+    publish_initial_state: true
+
+sensor:
+  - platform: uptime
+    name: "$devicename Uptime"
+  - platform: wifi_signal
+    name: "$devicename WiFi Signal"
+    update_interval: 60s
+  - platform: homeassistant
+    id: outdoor_temperature
+    entity_id: sensor.gw1000_v1_7_6_outdoor_temperature
+  - platform: template
+    name: $devicename free memory
+    lambda: return heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    icon: "mdi:memory"
+    entity_category: diagnostic
+    state_class: measurement
+    unit_of_measurement: "b"
+    update_interval: 60s
+
+  - platform: homeassistant
+    id: door_sensor
+    entity_id: binary_sensor.vkhodna_vrata_door
+
+  # Tracks the bathroom humidity
+  - platform: homeassistant
+    id: bania_humidity
+    entity_id: sensor.bania_humidity
+    on_value:
+      - lvgl.label.update:
+          id: humidity_label
+          text: !lambda return (std::to_string(int(x)) + "%").c_str();
+
+  # Tracks the bathroom temperature
+  - platform: homeassistant
+    id: bania_temperature
+    entity_id: sensor.bania_temperature
+    on_value:
+      - lvgl.label.update:
+          id: temp_label
+          text: !lambda return (std::to_string(int(x)) + "°C").c_str();
+
+  # Tracks the brightness level of the light dimmer
+  - platform: homeassistant
+    id: light_brightness
+    entity_id: light.kukhnia
+    attribute: brightness
+    on_value: 
+      - lvgl.label.update:
+          id: light_brightness_label
+          text: !lambda return (std::to_string(int(x)) + "%").c_str();
+        
+
+external_components:
+  #  - source: github://bearpawmaxim/esphome@pr3625fix
+  #    components: [ gc9a01 ]
+  # Above is no longer required as support now integrated into ili9xxx
+  - source: github://GadgetFactory/CST816S_touchscreen@1.0.0
+# Still need this external driver to support the touch screen
+
+spi:
+  mosi_pin: $mopin
+  clk_pin: $clpin
+# Don't use software - makes it crawl
+#  force_sw: True
+#mosi = Master Out Slave In
+#miso = Master In Slave Out or fermented bean paste. In this case, most likely the former rather than the latter. Doesn't matter as not used.
+
+i2c:
+  sda: $sdapin
+  scl: $sclpin
+  #Following helped someone get rid of the "Components should block" error messages but didn't for me
+  #frequency: 400kHz
+
+display:
+  - platform: ili9xxx
+    model: GC9A01A
+    # Above is for when or if this is merged into the ili9xxx platform
+    # Until then though, need to use an external component
+    #  - platform: gc9a01
+    id: watchface
+    reset_pin: $repin
+    cs_pin: $cspin
+    invert_colors: true
+    auto_clear_enabled: False
+    dc_pin:
+      number: $dcpin
+      ignore_strapping_warning: true
+      # The above is to remove the strapping pin warning message
+    # The next are optional
+    #    width: 240
+    #    height: 240
+    # Disable this if using ble_tracker as the poor thing doesn't have enough memory
+    # Enable it if not using ble_tracker as you will find the screen looks and responds better
+    # Disable this if you are encountering random reboots or other issues
+    #    eight_bit_color: false
+    # How often to refresh the display
+    update_interval: 1s
+# Rotate the screen so usb socket is pointing down
+#    rotation: 90
+# No longer needed with integrated ili9xxx support
+#Create a script to turn the screen off after a set period
+script:
+  - id: screentime
+    mode: restart
+    then:
+      - light.turn_on: back_light
+      - delay: $screensaver
+      - light.turn_off: back_light
+
+output:
+  - platform: ledc
+    pin: $bkpin
+    id: gpio_3_backlight_pwm
+light:
+  - platform: monochromatic
+    output: gpio_3_backlight_pwm
+    name: "Display Backlight"
+    id: back_light
+    restore_mode: $screenstart
+
+#  - platform: CST816S_touchscreen
+text_sensor:
+  - platform: homeassistant
+    entity_id: sensor.vkhodna_vrata_door
+    id: buildingdoor
+    name: "Front Door Open"
+
+  - platform: homeassistant
+    id: weathertxt
+    entity_id: weather.u_doma
+
+  - platform: homeassistant
+    id: tm22
+    entity_id: sensor.tm22 # sensor ot home assistant za vreme na pristigane na tramvai 22
+    #attribute: departure_time
+    internal: False
+
+  - platform: homeassistant
+    id: weatherstate
+    entity_id: weather.u_doma #sensor za vreme ot home assistant
+
+  - platform: homeassistant
+    id: light_state
+    entity_id: light.kukhnia
+
+  - platform: CST816S_touchscreen
+    id: my_touch_screen
+    on_value:
+      then:
+        - lambda: |-
+            ESP_LOGI("TOUCH", "Detected Gesture: %s", x.c_str());
+
+        # SWIPE RIGHT (Next Page)
+        - if:
+            condition:
+              lambda: 'return x == "SWIPE RIGHT";'
+            then:
+              - lvgl.page.show:
+                  id: home_screen
+              - logger.log: "Swiped Right → Next Page"
+
+        # SWIPE LEFT (Previous Page)
+        - if:
+            condition:
+              lambda: 'return x == "SWIPE LEFT";'
+            then:
+              - lvgl.page.show:
+                  id: light_screen
+              - logger.log: "Swiped Left → Previous Page"
+
+        # SINGLE CLICK (Toggle Backlight)
+        - if:
+            condition:
+              lambda: 'return x == "SINGLE CLICK";'
+            then:
+              - light.toggle: back_light
+              - logger.log: "Single Click → Toggle Backlight"
+        - if:
+            condition:
+              text_sensor.state:
+                id: my_touch_screen
+                state: 'SWIPE UP'
+            then:
+              - homeassistant.service:
+                  service: light.turn_on
+                  data:
+                    entity_id: light.kukhnia
+                    brightness_step_pct: 10
+              - logger.log: "Swipe up → Increase brightness"
+
+        # SWIPE DOWN → Намаляване на яркостта
+        - if:
+            condition:
+              text_sensor.state:
+                id: my_touch_screen
+                state: 'SWIPE DOWN'
+            then:
+              - homeassistant.service:
+                  service: light.turn_on
+                  data:
+                    entity_id: light.kukhnia
+                    brightness_step_pct: -10
+              - logger.log: "Swipe down → Decrease brightness"      
+
+        # LONG PRESS (Go to Home Page)
+        - if:
+            condition:
+              lambda: 'return x == "LONG PRESS";'
+            then:
+              - lvgl.page.show: home_screen
+              - logger.log: "Long Press → Go to Home Page"
+
+# image:
+#   - file: mdi:fan
+#     id: fan_on
+#     resize: 20x20
+lvgl:
+  id: lvgl_display
+
+  pages:
+    - id: home_screen
+      on_load:
+        - logger.log: "Home Screen Loaded"
+        - lvgl.label.update:
+            id: temp_label
+            text: !lambda return (std::to_string(int(id(bania_temperature).state)) + "°C").c_str();
+        - lvgl.label.update:
+            id: humidity_label
+            text: !lambda return (std::to_string(int(id(bania_humidity).state)) + "%").c_str();
+
+      widgets:
+        # FAN TOGGLE BUTTON
+        - button:
+            id: fan_btn
+            x: 70
+            y: 30
+            width: 100
+            height: 40
+            checkable: true
+            on_click:
+              - homeassistant.service:
+                  service: switch.toggle
+                  data:
+                    entity_id: switch.ventilator_bania
+              - logger.log: "Fan toggled via Home Assistant"
+
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "Fan"
+
+        # TEMPERATURE LABEL
+        - label:
+            text: "Temp:"
+            x: 20
+            y: 150
+
+        # TEMPERATURE VALUE
+        - label:
+            id: temp_label
+            text: "Loading..."
+            x: 130
+            y: 150
+
+        # HUMIDITY LABEL
+        - label:
+            text: "Humidity:"
+            x: 20
+            y: 190
+
+        # HUMIDITY VALUE
+        - label:
+            id: humidity_label
+            text: "Loading..."
+            x: 130
+            y: 190
+
+    # PAGE FOR LIGHT CONTROL
+    - id: light_screen
+      on_load:
+        - logger.log: "Light Screen Loaded"
+        - lvgl.label.update:
+            id: light_brightness_label
+            text: !lambda return (std::to_string(int(id(light_brightness).state)) + "%").c_str();
+
+      widgets:
+        # LIGHT BRIGHTNESS LABEL
+        - label:
+            text: "Brightness:"
+            x: 20
+            y: 150
+
+        # LIGHT BRIGHTNESS VALUE
+        - label:
+            id: light_brightness_label
+            text: "Loading..."
+            x: 130
+            y: 150
+
+        # LIGHT BRIGHTNESS SLIDER (Fixed)
+        - slider:
+            id: light_slider
+            x: 20
+            y: 190
+            width: 200
+            height: 20
+            min_value: 0
+            max_value: 100
+            on_value:
+              then:
+                - homeassistant.service:
+                    service: light.turn_on
+                    data:
+                      entity_id: light.kukhnia
+                      brightness: !lambda return (int(x) * 255) / 100;
+
+
+
+
+
+
+
+
